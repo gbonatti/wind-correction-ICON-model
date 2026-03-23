@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+ENV/
+
+# Dados de entrada (não versionados — forneça os seus próprios)
+dados/2021/*
+dados/2022/*
+dados/2023/*
+dados/2024/*
+dados/2025/*
+!dados/2021/.gitkeep
+!dados/2022/.gitkeep
+!dados/2023/.gitkeep
+!dados/2024/.gitkeep
+!dados/2025/.gitkeep
+
+# Dados intermediários e saídas geradas pelos scripts
+dados/dados_corrigidos_cv.csv.gz
+dados/metricas_detalhadas_v2.csv
+dados/metricas_agregadas_v2.csv
+
+# Gráficos e PDFs gerados
+graficos/qqplots/
+graficos/heatmaps/
+graficos/mapas_espaciais/
+graficos/*.pdf
+
+# IDE / sistema
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
