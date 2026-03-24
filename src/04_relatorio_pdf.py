@@ -1,28 +1,25 @@
 """
 04_relatorio_pdf.py
 ===================
-Gera dois PDFs a partir do dados_corrigidos_cv.csv.gz:
+Gera PDFs de diagnóstico para vento médio e rajada de vento.
 
-  relatorio_qm_todos_anos.pdf  — LOO-CV completo (todos os anos)
-  relatorio_qm_2025.pdf        — somente o ano de avaliação (ANO_AVALIACAO)
+Por variável (vento / rajada):
+  relatorio_qm_<var>_todos_anos.pdf  — LOO-CV completo
+  relatorio_qm_<var>_<ANO>.pdf       — somente o ano de avaliação
 
 Estrutura de cada PDF:
   Pág. 1  — Capa com métricas globais
-  Pág. 2  — Mapa espacial: BIAS Original vs BIAS QM (1×2)
-  Pág. 3  — Mapa espacial: CV sazonal DJF/MAM/JJA/SON (2×2)
-  Pág. 4…N— Uma página por estação:
-               · Mini-mapa de localização
-               · Q-Q overlay por estação do ano
-               · Delta-quantiles por estação do ano
-               · Tabela de métricas (Anual + sazonais)
+  Pág. 2  — Mapa: BIAS Original vs QM (1×2)
+  Pág. 3  — Mapa: CV sazonal DJF/MAM/JJA/SON (2×2)
+  Pág. 4…N— Uma página por estação (Q-Q + Delta-quantiles + tabela)
   Pág. N+1— Sumário: ranking por Skill Score e KGE
 
 Depende de:
   utils_qm.py
-  dados_corrigidos_cv.csv.gz   (gerado por 01_metricas_v2.py)
-  metricas_agregadas_v2.csv    (gerado por 01_metricas_v2.py)
-  estacoes.csv                 (colunas: nome;codigo;lat;lon)
-  shape/SP.shp                 (shapefile do estado de SP)
+  dados_corrigidos_cv_<var>.csv.gz   (gerado por 01_metricas.py)
+  metricas_agregadas_<var>.csv       (gerado por 01_metricas.py)
+  estacoes.csv
+  shape/SP.shp
 """
 
 import os
@@ -43,7 +40,8 @@ import geopandas as gpd
 warnings.filterwarnings('ignore')
 
 from utils_qm import (
-    ANOS, ESTACOES_DO_ANO, ARQUIVO_CORRIGIDO, ARQUIVO_AGREGADO,
+    ANOS, VARIAVEIS, ESTACOES_DO_ANO,
+    arquivo_corrigido, arquivo_agregado,
     ESTACOES_CSV, SHP_PATH, _PROJECT_DIR,
     calcular_metricas_completo,
 )
@@ -58,30 +56,23 @@ COR_QM        = '#2A7FE0'
 COR_REF       = '#888888'
 N_QUANTILES   = 100
 
-_DIR_SAIDA   = os.path.join(_PROJECT_DIR, 'graficos')
-EXTENT       = [-53.2, -43.9, -25.4, -19.7]
-PROJ         = ccrs.PlateCarree()
-MARKER_SIZE  = 140
-
-SUBCONJUNTOS = [
-    ('todos_anos',      None,           'LOO-CV — Todos os Anos',   'relatorio_qm_todos_anos.pdf'),
-    (str(ANO_AVALIACAO), ANO_AVALIACAO, f'Operacional — {ANO_AVALIACAO}', f'relatorio_qm_{ANO_AVALIACAO}.pdf'),
-]
+_DIR_SAIDA  = os.path.join(_PROJECT_DIR, 'graficos')
+EXTENT      = [-53.2, -43.9, -25.4, -19.7]
+PROJ        = ccrs.PlateCarree()
+MARKER_SIZE = 140
 
 
 # ---------------------------------------------------------------------------
 # FUNÇÕES AUXILIARES DE MAPA
 # ---------------------------------------------------------------------------
 def _base_mapa(ax, gdf_sp):
-    """Aplica fundo branco + shapefile + estilo de borda num eixo cartopy."""
     feat = ShapelyFeature(gdf_sp.geometry, PROJ,
                           facecolor='white', edgecolor='#333333', linewidth=0.8)
     ax.set_extent(EXTENT, crs=PROJ)
     ax.set_facecolor('white')
     ax.add_feature(feat, zorder=2)
     for spine in ax.spines.values():
-        spine.set_edgecolor('#AAAAAA')
-        spine.set_linewidth(0.7)
+        spine.set_edgecolor('#AAAAAA'); spine.set_linewidth(0.7)
 
 
 def _labels_estacoes(ax, lons, lats, codigos, fontsize=6):
@@ -95,24 +86,19 @@ def _labels_estacoes(ax, lons, lats, codigos, fontsize=6):
 # ---------------------------------------------------------------------------
 # PÁGINA 2 — MAPA DE BIAS ANUAL (1 × 2)
 # ---------------------------------------------------------------------------
-def pagina_mapa_bias(gdf_sp, metricas, descricao):
+def pagina_mapa_bias(gdf_sp, metricas, descricao, cfg):
     bias_vals = np.concatenate([metricas['BIAS_orig'].values,
                                  metricas['BIAS_qm'].values])
-    absmax    = np.ceil(np.nanpercentile(np.abs(bias_vals), 98) * 10) / 10
-    norm      = TwoSlopeNorm(vmin=-absmax, vcenter=0, vmax=absmax)
-
-    lons    = metricas['lon'].values
-    lats    = metricas['lat'].values
-    codigos = metricas['estacao'].values
+    absmax = np.ceil(np.nanpercentile(np.abs(bias_vals), 98) * 10) / 10
+    norm   = TwoSlopeNorm(vmin=-absmax, vcenter=0, vmax=absmax)
+    lons, lats, codigos = metricas['lon'].values, metricas['lat'].values, metricas['estacao'].values
 
     fig, axes = plt.subplots(
-        1, 2, figsize=(16, 7.5),
-        subplot_kw={'projection': PROJ},
+        1, 2, figsize=(16, 7.5), subplot_kw={'projection': PROJ},
         facecolor='#F7F9FC',
         gridspec_kw={'wspace': 0.04, 'left': 0.01, 'right': 0.88,
                      'top': 0.86, 'bottom': 0.06},
     )
-
     for ax, vals, subtit in [
         (axes[0], metricas['BIAS_orig'].values, 'ICON Original'),
         (axes[1], metricas['BIAS_qm'].values,   'ICON + Quantile Mapping'),
@@ -126,11 +112,10 @@ def pagina_mapa_bias(gdf_sp, metricas, descricao):
 
     cax = fig.add_axes([0.905, 0.10, 0.009, 0.70])
     cb  = fig.colorbar(sc, cax=cax, extend='both')
-    cb.set_label('BIAS (m/s)', fontsize=8.5, labelpad=5)
+    cb.set_label(f'BIAS ({cfg["unidade"]})', fontsize=8.5, labelpad=5)
     cb.ax.tick_params(labelsize=7.5)
-
     fig.suptitle(
-        f'Distribuição Espacial do BIAS Anual — {descricao}\n'
+        f'Distribuição Espacial do BIAS Anual — {cfg["label"]} — {descricao}\n'
         'vermelho = superestimativa  |  azul = subestimativa',
         fontsize=12, fontweight='bold', y=0.97,
     )
@@ -140,7 +125,8 @@ def pagina_mapa_bias(gdf_sp, metricas, descricao):
 # ---------------------------------------------------------------------------
 # PÁGINA 3 — MAPA CV SAZONAL (2 × 2)
 # ---------------------------------------------------------------------------
-def pagina_mapa_cv(gdf_sp, df_cv, est, descricao):
+def pagina_mapa_cv(gdf_sp, df_cv, est, descricao, cfg):
+    col_qm = cfg['col_qm']
     df_cv_geo = df_cv.merge(est[['codigo', 'lat', 'lon']],
                             left_on='estacao', right_on='codigo', how='inner')
 
@@ -148,9 +134,9 @@ def pagina_mapa_cv(gdf_sp, df_cv, est, descricao):
     for sigla, meses in ESTACOES_DO_ANO.items():
         cv_est = (
             df_cv_geo[df_cv_geo['mes'].isin(meses)]
-            .groupby(['estacao', 'lat', 'lon'])['vento_icon_qm']
+            .groupby(['estacao', 'lat', 'lon'])[col_qm]
             .agg(lambda x: x.std() / x.mean() if x.mean() > 0 else np.nan)
-            .reset_index().rename(columns={'vento_icon_qm': 'cv'}).dropna(subset=['cv'])
+            .reset_index().rename(columns={col_qm: 'cv'}).dropna(subset=['cv'])
         )
         cv_dados[sigla] = cv_est
         cv_global.extend(cv_est['cv'].values.tolist())
@@ -159,14 +145,12 @@ def pagina_mapa_cv(gdf_sp, df_cv, est, descricao):
     norm_cv = Normalize(vmin=0, vmax=vmax_cv)
 
     fig, axes = plt.subplots(
-        2, 2, figsize=(14, 11),
-        subplot_kw={'projection': PROJ},
+        2, 2, figsize=(14, 11), subplot_kw={'projection': PROJ},
         facecolor='#F7F9FC',
         gridspec_kw={'wspace': 0.04, 'hspace': 0.08,
                      'left': 0.01, 'right': 0.88,
                      'top': 0.90, 'bottom': 0.03},
     )
-
     sc2 = None
     for ax, sigla in zip(axes.flatten(), list(ESTACOES_DO_ANO.keys())):
         cv_est = cv_dados[sigla]
@@ -183,9 +167,8 @@ def pagina_mapa_cv(gdf_sp, df_cv, est, descricao):
     cb  = fig.colorbar(sc2, cax=cax, extend='max')
     cb.set_label('CV = σ / μ', fontsize=8.5, labelpad=5)
     cb.ax.tick_params(labelsize=7.5)
-
     fig.suptitle(
-        f'Coeficiente de Variação Sazonal do Vento — {descricao}',
+        f'Coeficiente de Variação Sazonal — {cfg["label"]} — {descricao}',
         fontsize=12, fontweight='bold', y=0.96,
     )
     return fig
@@ -194,51 +177,44 @@ def pagina_mapa_cv(gdf_sp, df_cv, est, descricao):
 # ---------------------------------------------------------------------------
 # PÁGINA DE ESTAÇÃO
 # ---------------------------------------------------------------------------
-def pagina_estacao(id_est, df_full, descricao, gdf_sp, est_row, todas_coords_geo=None):
+def pagina_estacao(id_est, df_full, descricao, gdf_sp, est_row,
+                   todas_coords_geo, cfg):
+    col_obs   = cfg['col_obs']
+    col_model = cfg['col_model']
+    col_qm    = cfg['col_qm']
+    un        = cfg['unidade']
     percentis = np.linspace(0, N_QUANTILES, N_QUANTILES + 1)
 
     fig = plt.figure(figsize=(16, 11))
     fig.patch.set_facecolor('#F7F9FC')
 
-    # GridSpec: linha 0 = QQ+minimap, linha 1 = delta, linha 2 = tabela
     gs = gridspec.GridSpec(
         3, 5, figure=fig,
         height_ratios=[3.2, 2.0, 2.2],
         hspace=0.52, wspace=0.40,
-        left=0.05, right=0.98, top=0.91, bottom=0.04
+        left=0.05, right=0.98, top=0.91, bottom=0.04,
     )
 
-    # ── Mini-mapa de localização (col 4, linhas 0+1) ────────────────────
+    # Mini-mapa
     ax_map = fig.add_subplot(gs[0:2, 4], projection=PROJ)
     _base_mapa(ax_map, gdf_sp)
-
-    # Todas as estações em cinza
     if est_row is not None and not est_row.empty:
-        # Pontos de fundo — todas as estações
         if todas_coords_geo is not None:
-            ax_map.scatter(
-                todas_coords_geo['lon'].values, todas_coords_geo['lat'].values,
-                s=25, c='#AAAAAA', zorder=4, transform=PROJ,
-                edgecolors='#666666', linewidths=0.4,
-            )
-        # Estação atual destacada
+            ax_map.scatter(todas_coords_geo['lon'].values, todas_coords_geo['lat'].values,
+                           s=25, c='#AAAAAA', zorder=4, transform=PROJ,
+                           edgecolors='#666666', linewidths=0.4)
         row = est_row.iloc[0]
-        ax_map.scatter(
-            row['lon'], row['lat'],
-            s=80, c=COR_QM, zorder=6, transform=PROJ,
-            edgecolors='#111111', linewidths=0.8,
-        )
-        ax_map.text(
-            row['lon'] + 0.15, row['lat'] + 0.15, str(id_est),
-            fontsize=7, fontweight='bold', color='#111111',
-            transform=PROJ, zorder=7,
-            path_effects=[pe.withStroke(linewidth=2.0, foreground='white')],
-        )
+        ax_map.scatter(row['lon'], row['lat'], s=80, c=COR_QM, zorder=6,
+                       transform=PROJ, edgecolors='#111111', linewidths=0.8)
+        ax_map.text(row['lon'] + 0.15, row['lat'] + 0.15, str(id_est),
+                    fontsize=7, fontweight='bold', color='#111111',
+                    transform=PROJ, zorder=7,
+                    path_effects=[pe.withStroke(linewidth=2.0, foreground='white')])
     ax_map.set_title('Localização', fontsize=8, fontweight='bold', pad=3)
 
-    # ── Q-Q + Delta-quantiles por estação do ano (4 colunas) ────────────
+    # Q-Q + Delta por estação do ano
     for col, (nome_s, meses) in enumerate(ESTACOES_DO_ANO.items()):
-        df_s  = df_full[df_full['mes'].isin(meses)]
+        df_s     = df_full[df_full['mes'].isin(meses)]
         ax_qq    = fig.add_subplot(gs[0, col])
         ax_delta = fig.add_subplot(gs[1, col])
         ax_qq.set_facecolor('#FFFFFF')
@@ -251,15 +227,14 @@ def pagina_estacao(id_est, df_full, descricao, gdf_sp, est_row, todas_coords_geo
             ax_qq.set_title(nome_s, fontsize=9, fontweight='bold')
             continue
 
-        obs    = df_s['vento_obs'].values
-        orig   = df_s['vento_icon'].values
-        qm_arr = df_s['vento_icon_qm'].values
+        obs    = df_s[col_obs].values
+        orig   = df_s[col_model].values
+        qm_arr = df_s[col_qm].values
         q_obs  = np.percentile(obs,    percentis)
         q_orig = np.percentile(orig,   percentis)
         q_qm   = np.percentile(qm_arr, percentis)
         vmax   = max(q_obs.max(), q_orig.max(), q_qm.max()) * 1.05
 
-        # Q-Q
         ax_qq.plot([0, vmax], [0, vmax], color=COR_REF, lw=1.0, ls='--')
         ax_qq.scatter(q_obs, q_orig, c=percentis, cmap='Oranges',
                       s=16, edgecolors='none', alpha=0.7, vmin=0, vmax=100, zorder=3)
@@ -269,8 +244,8 @@ def pagina_estacao(id_est, df_full, descricao, gdf_sp, est_row, todas_coords_geo
         ax_qq.plot(q_obs, q_qm,   color=COR_QM,  lw=1.6, alpha=0.8, zorder=3)
         ax_qq.set_xlim(0, vmax); ax_qq.set_ylim(0, vmax)
         ax_qq.set_aspect('equal', adjustable='box')
-        ax_qq.set_xlabel('Obs (m/s)', fontsize=7)
-        ax_qq.set_ylabel('Modelo (m/s)', fontsize=7)
+        ax_qq.set_xlabel(f'Obs ({un})', fontsize=7)
+        ax_qq.set_ylabel(f'Modelo ({un})', fontsize=7)
         ax_qq.tick_params(labelsize=6.5)
         ax_qq.grid(True, linestyle=':', linewidth=0.5, color='#DDDDDD')
         ax_qq.set_title(nome_s, fontsize=9, fontweight='bold', pad=4)
@@ -283,21 +258,19 @@ def pagina_estacao(id_est, df_full, descricao, gdf_sp, est_row, todas_coords_geo
                    bbox=dict(boxstyle='round,pad=0.3', fc='#F0F4FA',
                              ec='#CCCCCC', alpha=0.92))
 
-        # Delta-quantiles
         ax_delta.axhline(0, color=COR_REF, lw=1.0, ls='--')
         ax_delta.fill_between(percentis, q_orig - q_obs, 0, alpha=0.18, color=COR_ORIG)
         ax_delta.fill_between(percentis, q_qm   - q_obs, 0, alpha=0.18, color=COR_QM)
         ax_delta.plot(percentis, q_orig - q_obs, color=COR_ORIG, lw=1.5)
         ax_delta.plot(percentis, q_qm   - q_obs, color=COR_QM,   lw=1.5)
         ax_delta.set_xlabel('Percentil (%)', fontsize=7)
-        ax_delta.set_ylabel('Δ q  (m/s)', fontsize=7)
+        ax_delta.set_ylabel(f'Δ q  ({un})', fontsize=7)
         ax_delta.tick_params(labelsize=6.5)
         ax_delta.grid(True, linestyle=':', linewidth=0.5, color='#DDDDDD')
 
-    # ── Tabela de métricas ───────────────────────────────────────────────
+    # Tabela de métricas
     ax_tab = fig.add_subplot(gs[2, :])
     ax_tab.axis('off')
-
     col_labels = ['Período', 'N',
                   'BIAS\nOrig', 'BIAS\nQM',
                   'RMSE\nOrig', 'RMSE\nQM',
@@ -311,7 +284,7 @@ def pagina_estacao(id_est, df_full, descricao, gdf_sp, est_row, todas_coords_geo
         df_p = df_full if meses is None else df_full[df_full['mes'].isin(meses)]
         if df_p.empty or len(df_p) < 10:
             continue
-        m = calcular_metricas_completo(df_p)
+        m = calcular_metricas_completo(df_p, var=cfg.get('_var', 'vento'))
         ss_rmse = m.get('SS_RMSE', float('nan'))
         ss_mae  = m.get('SS_MAE',  float('nan'))
         linhas.append([
@@ -331,45 +304,35 @@ def pagina_estacao(id_est, df_full, descricao, gdf_sp, est_row, todas_coords_geo
         table.auto_set_font_size(False)
         table.set_fontsize(6.5)
         table.scale(1, 1.45)
-
         for j in range(len(col_labels)):
             c = table[(0, j)]
-            c.set_facecolor('#1A3A5C')
-            c.set_text_props(color='white', fontweight='bold')
-
+            c.set_facecolor('#1A3A5C'); c.set_text_props(color='white', fontweight='bold')
         for i, linha in enumerate(linhas, 1):
-            # Linha "Anual" com destaque leve
             bg = '#EEF4FF' if i == 1 else ('#F7F9FC' if i % 2 == 0 else '#FFFFFF')
             for j in range(len(col_labels)):
                 table[(i, j)].set_facecolor(bg)
-            # Coloração SS RMSE
             try:
                 ss = float(linha[-2])
                 table[(i, len(col_labels) - 2)].set_facecolor(
                     '#C8E6C9' if ss > 0 else '#FFCDD2')
             except (ValueError, TypeError):
                 pass
-            # Coloração BIAS QM (col 3)
             try:
-                bqm = float(linha[3])
-                borig = float(linha[2])
+                bqm, borig = float(linha[3]), float(linha[2])
                 if abs(bqm) < abs(borig):
                     table[(i, 3)].set_facecolor('#C8E6C9')
             except (ValueError, TypeError):
                 pass
 
-    # Legenda
-    fig.legend(
-        handles=[
-            Line2D([0],[0], color=COR_REF,  lw=1.5, ls='--', label='1:1 / zero ref.'),
-            Line2D([0],[0], color=COR_ORIG, lw=2.2,           label='ICON Original'),
-            Line2D([0],[0], color=COR_QM,   lw=2.2,           label='ICON + QM'),
-        ],
-        loc='lower center', ncol=3, fontsize=8.5, frameon=True,
-        framealpha=0.9, bbox_to_anchor=(0.5, 0.005),
-    )
+    fig.legend(handles=[
+        Line2D([0],[0], color=COR_REF,  lw=1.5, ls='--', label='1:1 / zero ref.'),
+        Line2D([0],[0], color=COR_ORIG, lw=2.2,           label='ICON Original'),
+        Line2D([0],[0], color=COR_QM,   lw=2.2,           label='ICON + QM'),
+    ], loc='lower center', ncol=3, fontsize=8.5, frameon=True,
+       framealpha=0.9, bbox_to_anchor=(0.5, 0.005))
+
     fig.suptitle(
-        f'Estação {id_est}   |   {descricao}   |   n = {len(df_full):,}',
+        f'{cfg["label"]} — Estação {id_est}   |   {descricao}   |   n = {len(df_full):,}',
         fontsize=12, fontweight='bold', y=0.972, color='#222222',
     )
     return fig
@@ -378,14 +341,14 @@ def pagina_estacao(id_est, df_full, descricao, gdf_sp, est_row, todas_coords_geo
 # ---------------------------------------------------------------------------
 # PÁGINA DE CAPA
 # ---------------------------------------------------------------------------
-def pagina_capa(total_estacoes, stats_globais, descricao, anos_usados):
+def pagina_capa(total_estacoes, stats_globais, descricao, anos_usados, cfg):
     fig = plt.figure(figsize=(16, 11))
     fig.patch.set_facecolor('#12213A')
 
     def txt(x, y, s, **kw):
         fig.text(x, y, s, ha='center', va='center', **kw)
 
-    txt(0.5, 0.83, 'Relatório de Correção de Viés do Vento',
+    txt(0.5, 0.83, f'Relatório de Correção — {cfg["label"]}',
         fontsize=24, fontweight='bold', color='white')
     txt(0.5, 0.75, 'ICON Original  vs  ICON + Quantile Mapping',
         fontsize=16, color='#7AAAD0')
@@ -394,12 +357,13 @@ def pagina_capa(total_estacoes, stats_globais, descricao, anos_usados):
     txt(0.5, 0.61, f'{descricao}   |   Anos: {anos_usados}   |   Estações: {total_estacoes}',
         fontsize=11, color='#889AAA')
 
+    un = cfg['unidade']
     boxes = [
         ('SS RMSE médio',   f"{stats_globais.get('SS_RMSE', float('nan')):+.3f}"),
         ('KGE Orig médio',  f"{stats_globais.get('KGE_orig', float('nan')):.3f}"),
         ('KGE QM médio',    f"{stats_globais.get('KGE_QM',  float('nan')):.3f}"),
-        ('BIAS Orig médio', f"{stats_globais.get('BIAS_orig', float('nan')):+.3f} m/s"),
-        ('BIAS QM médio',   f"{stats_globais.get('BIAS_QM',  float('nan')):+.3f} m/s"),
+        ('BIAS Orig médio', f"{stats_globais.get('BIAS_orig', float('nan')):+.3f} {un}"),
+        ('BIAS QM médio',   f"{stats_globais.get('BIAS_QM',  float('nan')):+.3f} {un}"),
     ]
     for k, (label, val) in enumerate(boxes):
         x  = 0.15 + k * 0.175
@@ -413,15 +377,13 @@ def pagina_capa(total_estacoes, stats_globais, descricao, anos_usados):
         ax.text(0.5, 0.25, label, ha='center', va='center', fontsize=8,
                 color='#AABBCC', transform=ax.transAxes)
 
-    # Índice de páginas
     txt(0.5, 0.20, 'Conteúdo:', fontsize=10, fontweight='bold', color='#AABBCC')
-    indice = [
+    for i, linha in enumerate([
         'Pág. 2 — Mapa espacial: BIAS Anual (Original vs QM)',
         'Pág. 3 — Mapa espacial: Coeficiente de Variação Sazonal',
         f'Pág. 4 a {total_estacoes + 3} — Q-Q plots + tabela de métricas por estação',
         f'Pág. {total_estacoes + 4} — Sumário: ranking por Skill Score e KGE',
-    ]
-    for i, linha in enumerate(indice):
+    ]):
         txt(0.5, 0.15 - i * 0.048, linha, fontsize=9, color='#778899')
 
     txt(0.5, 0.04, 'Gerado com utils_qm.py + scripts 01–05',
@@ -430,12 +392,11 @@ def pagina_capa(total_estacoes, stats_globais, descricao, anos_usados):
 
 
 # ---------------------------------------------------------------------------
-# PÁGINA DE SUMÁRIO — ranking das estações
+# PÁGINA DE SUMÁRIO
 # ---------------------------------------------------------------------------
 def pagina_sumario(df_metricas, descricao):
     fig = plt.figure(figsize=(16, 11))
     fig.patch.set_facecolor('#F7F9FC')
-
     fig.suptitle(f'Sumário — Ranking das Estações  |  {descricao}',
                  fontsize=13, fontweight='bold', y=0.97, color='#1A3A5C')
 
@@ -448,7 +409,6 @@ def pagina_sumario(df_metricas, descricao):
     ]):
         ax = fig.add_subplot(gs[col])
         ax.axis('off')
-
         df_rank = df_metricas[['estacao', 'BIAS_orig', 'BIAS_QM',
                                 'RMSE_orig', 'RMSE_QM', 'KGE_orig',
                                 'KGE_QM', 'SS_RMSE']].copy()
@@ -480,31 +440,24 @@ def pagina_sumario(df_metricas, descricao):
         table.auto_set_font_size(False)
         table.set_fontsize(7)
         table.scale(1, 1.35)
-
         for j in range(len(col_labels)):
             c = table[(0, j)]
-            c.set_facecolor(cor_header)
-            c.set_text_props(color='white', fontweight='bold')
-
+            c.set_facecolor(cor_header); c.set_text_props(color='white', fontweight='bold')
         for i, row in enumerate(rows, 1):
             bg = '#F7F9FC' if i % 2 == 0 else '#FFFFFF'
             for j in range(len(col_labels)):
                 table[(i, j)].set_facecolor(bg)
-            # Destaca SS RMSE
             try:
                 ss = float(row[-1])
                 table[(i, len(col_labels) - 1)].set_facecolor(
                     '#C8E6C9' if ss > 0 else '#FFCDD2')
             except (ValueError, TypeError):
                 pass
-            # Top 3 com fundo dourado
             if i <= 3:
                 table[(i, 0)].set_facecolor('#FFF9C4')
                 table[(i, 0)].set_text_props(fontweight='bold')
-
         ax.set_title(titulo_col, fontsize=10, fontweight='bold',
                      color=cor_header, pad=8)
-
     return fig
 
 
@@ -512,109 +465,105 @@ def pagina_sumario(df_metricas, descricao):
 # MAIN
 # ---------------------------------------------------------------------------
 print('=' * 60)
-print('  Script 04 — Relatório PDF')
+print('  Script 04 — Relatório PDF (Vento + Rajada)')
 print('=' * 60)
 
-# Verifica dependências
-for arq, nome in [(ARQUIVO_CORRIGIDO, 'dados_corrigidos_cv.csv.gz'),
-                  (ARQUIVO_AGREGADO,  'metricas_agregadas_v2.csv'),
-                  (ESTACOES_CSV,      'estacoes.csv'),
-                  (SHP_PATH,          'shape/SP.shp')]:
+for arq in [ESTACOES_CSV, SHP_PATH]:
     if not os.path.exists(arq):
         print(f'\n[ERRO] Arquivo não encontrado: {arq}')
         raise SystemExit(1)
 
-print(f'  Carregando dados...')
-df_all   = pd.read_csv(ARQUIVO_CORRIGIDO, compression='gzip')
-metricas = pd.read_csv(ARQUIVO_AGREGADO, sep=';', decimal=',')
-est      = pd.read_csv(ESTACOES_CSV, sep=';')
+print('  Carregando shapefile e estações...')
+gdf_sp = gpd.read_file(SHP_PATH)
+est    = pd.read_csv(ESTACOES_CSV, sep=';')
 est.columns   = est.columns.str.strip()
 est['codigo'] = est['codigo'].astype(str).str.strip()
-gdf_sp   = gpd.read_file(SHP_PATH)
+todas_coords  = est[['codigo', 'lat', 'lon']].copy()
 
-# Junta coordenadas às métricas
-metricas['estacao'] = metricas['estacao'].astype(str).str.strip()
-metricas_geo = metricas.merge(est[['codigo', 'lat', 'lon', 'nome']],
-                               left_on='estacao', right_on='codigo', how='inner')
+for var, cfg in VARIAVEIS.items():
+    # Adiciona chave _var ao cfg para repassar à calcular_metricas_completo
+    cfg_local = {**cfg, '_var': var}
 
-# Tabela de todas as coords para o mini-mapa
-todas_coords = est[['codigo', 'lat', 'lon']].copy()
+    arq_cv  = arquivo_corrigido(var)
+    arq_agg = arquivo_agregado(var)
 
-print(f'  Registros: {len(df_all):,}  |  Estações: {df_all["estacao"].nunique()}\n')
-
-for sufixo, ano_filtro, descricao, nome_pdf in SUBCONJUNTOS:
-
-    df = df_all[df_all['ano'] == ano_filtro] if ano_filtro else df_all
-
-    if df.empty:
-        print(f'  [AVISO] Sem dados para "{sufixo}", pulando.\n')
+    if not os.path.exists(arq_cv) or not os.path.exists(arq_agg):
+        print(f'\n  [AVISO] Arquivos de "{var}" não encontrados. '
+              f'Execute 01_metricas.py primeiro. Pulando.\n')
         continue
 
-    estacoes    = sorted(df['estacao'].unique())
-    total       = len(estacoes)
-    arquivo_pdf = os.path.join(_DIR_SAIDA, nome_pdf)
-    anos_usados = [ano_filtro] if ano_filtro else ANOS
+    print(f'\n{"─"*60}')
+    print(f'  Variável: {cfg["titulo"]}')
+    print(f'{"─"*60}')
 
-    print(f'  [{descricao}]  →  {arquivo_pdf}')
+    df_all   = pd.read_csv(arq_cv,  compression='gzip')
+    metricas = pd.read_csv(arq_agg, sep=';', decimal=',')
+    metricas['estacao'] = metricas['estacao'].astype(str).str.strip()
+    metricas_geo = metricas.merge(est[['codigo', 'lat', 'lon', 'nome']],
+                                   left_on='estacao', right_on='codigo', how='inner')
+    print(f'  Registros: {len(df_all):,}  |  Estações: {df_all["estacao"].nunique()}')
 
-    # Métricas globais para a capa
-    metr_global = calcular_metricas_completo(df)
+    subconjuntos = [
+        ('todos_anos',       None,           'LOO-CV — Todos os Anos',
+         f'relatorio_qm_{var}_todos_anos.pdf'),
+        (str(ANO_AVALIACAO), ANO_AVALIACAO,  f'Operacional — {ANO_AVALIACAO}',
+         f'relatorio_qm_{var}_{ANO_AVALIACAO}.pdf'),
+    ]
 
-    # Métricas por estação para o sumário (apenas estações com coordenadas)
-    df_metr_rank = metricas_geo.copy()
+    for sufixo, ano_filtro, descricao, nome_pdf in subconjuntos:
+        df = df_all[df_all['ano'] == ano_filtro] if ano_filtro else df_all
+        if df.empty:
+            print(f'  [AVISO] Sem dados para "{sufixo}", pulando.\n')
+            continue
 
-    paginas = 0
-    with PdfPages(arquivo_pdf) as pdf:
+        estacoes    = sorted(df['estacao'].unique())
+        total       = len(estacoes)
+        arquivo_pdf = os.path.join(_DIR_SAIDA, nome_pdf)
+        anos_usados = [ano_filtro] if ano_filtro else ANOS
 
-        # Pág 1 — Capa
-        fig = pagina_capa(total, metr_global, descricao, anos_usados)
-        pdf.savefig(fig, bbox_inches='tight', facecolor=fig.get_facecolor())
-        plt.close(fig)
+        print(f'\n  [{descricao}]  →  {arquivo_pdf}')
+        metr_global = calcular_metricas_completo(df, var=var)
 
-        # Pág 2 — Mapa BIAS anual
-        print(f'    Gerando mapa de BIAS...')
-        fig = pagina_mapa_bias(gdf_sp, metricas_geo, descricao)
-        pdf.savefig(fig, dpi=DPI, bbox_inches='tight', facecolor=fig.get_facecolor())
-        plt.close(fig)
+        paginas = 0
+        with PdfPages(arquivo_pdf) as pdf:
+            fig = pagina_capa(total, metr_global, descricao, anos_usados, cfg_local)
+            pdf.savefig(fig, bbox_inches='tight', facecolor=fig.get_facecolor())
+            plt.close(fig)
 
-        # Pág 3 — Mapa CV sazonal
-        print(f'    Gerando mapa de CV sazonal...')
-        fig = pagina_mapa_cv(gdf_sp, df, est, descricao)
-        pdf.savefig(fig, dpi=DPI, bbox_inches='tight', facecolor=fig.get_facecolor())
-        plt.close(fig)
-
-        # Págs 4…N — Uma por estação
-        for idx, eid in enumerate(estacoes, 1):
-            print(f'    [{idx/total*100:5.1f}%] {eid} ({idx}/{total})', end='\r')
-            df_est = df[df['estacao'] == eid]
-            if df_est.empty:
-                continue
-
-            # Prepara dados para o mini-mapa
-            est_match = metricas_geo[metricas_geo['estacao'] == eid]
-            est_row_simple = est_match if not est_match.empty else None
-
-            fig = pagina_estacao(eid, df_est, descricao, gdf_sp,
-                                 est_row_simple, todas_coords)
+            print('    Gerando mapa de BIAS...')
+            fig = pagina_mapa_bias(gdf_sp, metricas_geo, descricao, cfg_local)
             pdf.savefig(fig, dpi=DPI, bbox_inches='tight', facecolor=fig.get_facecolor())
             plt.close(fig)
-            paginas += 1
 
-        # Pág N+1 — Sumário ranking
-        print(f'\n    Gerando sumário...')
-        fig = pagina_sumario(df_metr_rank, descricao)
-        pdf.savefig(fig, dpi=DPI, bbox_inches='tight', facecolor=fig.get_facecolor())
-        plt.close(fig)
+            print('    Gerando mapa de CV sazonal...')
+            fig = pagina_mapa_cv(gdf_sp, df, est, descricao, cfg_local)
+            pdf.savefig(fig, dpi=DPI, bbox_inches='tight', facecolor=fig.get_facecolor())
+            plt.close(fig)
 
-        info = pdf.infodict()
-        info['Title']   = f'Relatório QM — {descricao}'
-        info['Subject'] = 'Quantile Mapping | LOO-CV | QM Mensal'
+            for idx, eid in enumerate(estacoes, 1):
+                print(f'    [{idx/total*100:5.1f}%] {eid} ({idx}/{total})', end='\r')
+                df_est = df[df['estacao'] == eid]
+                if df_est.empty:
+                    continue
+                est_match = metricas_geo[metricas_geo['estacao'] == eid]
+                fig = pagina_estacao(eid, df_est, descricao, gdf_sp,
+                                     est_match if not est_match.empty else None,
+                                     todas_coords, cfg_local)
+                pdf.savefig(fig, dpi=DPI, bbox_inches='tight', facecolor=fig.get_facecolor())
+                plt.close(fig)
+                paginas += 1
 
-    total_pag = paginas + 4   # capa + mapa bias + mapa cv + sumário
-    print(f'    Salvo: {arquivo_pdf}  ({total_pag} páginas)\n')
+            print(f'\n    Gerando sumário...')
+            fig = pagina_sumario(metricas_geo, descricao)
+            pdf.savefig(fig, dpi=DPI, bbox_inches='tight', facecolor=fig.get_facecolor())
+            plt.close(fig)
+
+            info = pdf.infodict()
+            info['Title']   = f'Relatório QM — {cfg["label"]} — {descricao}'
+            info['Subject'] = 'Quantile Mapping | LOO-CV | QM Mensal'
+
+        print(f'    Salvo: {arquivo_pdf}  ({paginas + 4} páginas)\n')
 
 print('=' * 60)
 print('  CONCLUÍDO')
-print(f'  graficos/relatorio_qm_todos_anos.pdf  — LOO-CV completo')
-print(f'  graficos/relatorio_qm_{ANO_AVALIACAO}.pdf        — somente {ANO_AVALIACAO}')
 print('=' * 60)
