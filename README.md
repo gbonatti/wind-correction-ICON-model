@@ -174,6 +174,6 @@ Para alterar o ano operacional de avaliação, edite `ANO_AVALIACAO = 2025` nos 
 
 ---
 
-## Licença
+## Gilberto Bonatti - Especialista Modelagem Numérica
 
-MIT
+
