@@ -192,4 +192,4 @@ Para adicionar ou remover variáveis, edite o dicionário `VARIAVEIS` em `utils_
 
 ---
 
-## Gilberto Bonatti — Especialista em Modelagem Numérica
+# Gilberto Bonatti — Especialista em Modelagem Numérica
